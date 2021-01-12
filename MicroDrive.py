@@ -81,10 +81,6 @@ class MicroDrive():
             'rounding':     [2, 2, 2], # default rounding level for stepper motor position 
             'direction':    [1, 1, 1], # [-1,-1,1]; # default travel direction {-1: 'backward', 1: 'forward'}
         } # travel defaults
-        # 'lower': [-1.2895e4   -1.2818e4   -1.2920e4]; # default lower limit of travel distance for each channel [um]                
-        # 'upper': [-1.2895e4   -1.2818e4   -1.2920e4]; # default upper limit of travel distance for each channel [um]                
-        # 'move': [1,1,0.1]; # default travel size [um]            
-        # 'step':         [1, 1, 1], # default number of steps to take per write increment [#]
 
         self.units = {
             'velocity': 'm/s',
@@ -272,12 +268,13 @@ class MicroDrive():
             bits.append(bit)
         #bits.reverse() # flip order of bits
         bits = [not(bit) for bit in bits] # invert bits
+        #print(bits)
 
         # read out flags
         status = dict();
-        status['success'] = bits[7];  # success flag
-        status['forward'] = [bits[i] for i in [2,4,6]] # flags for forward limit reached 
-        status['reverse'] = [bits[i] for i in [1,3,5]] # flags for reverse limit reached 
+        status['success'] = bits[7-1];  # success flag
+        status['forward'] = [bits[i-1] for i in [2,4,6]] # flags for forward limit reached 
+        status['reverse'] = [bits[i-1] for i in [1,3,5]] # flags for reverse limit reached 
         return status  
 
     def get_move_status(self):
@@ -306,6 +303,16 @@ class MicroDrive():
     def is_at_limit(self):
         flags = self.get_limit_status()
         return any(flags['forward']) or any(flags['reverse'])
+    
+    def check_limits(self):        
+        if self.is_at_limit():
+            flags = self.get_limit_status()
+            for n in range(self.axes['count']):
+                ax = self.axes['name'][n]
+                if flags['forward'][n]:
+                    self.notify(ax.upper()+'-Axis Forward Limiter Reached.')
+                if flags['reverse'][n]:
+                    self.notify(ax.upper()+'-Axis Reverse Limiter Reached.')            
 
     def wait(self):
         # waits long enough for the previously commanded move to finish.
@@ -323,27 +330,6 @@ class MicroDrive():
             # MCL_MicroDriveStop(unsigned char* status, int handle);
             status = ctypes.c_ubyte(); 
             response = self.library.MCL_MicroDriveStop(ctypes.byref(status),self.handle)
-            if self.check_success(response):
-                flags = self.check_movement(status.value)                           
-        return flags
-
-    def reset(self,axis='all'):
-        # reset all encoders (makes the current position of the microstage the zero position of the encoder)
-        flags = dict()
-        if self.loaded and self.connected:
-            status = ctypes.c_ubyte(); 
-            if axis.lower()=='x':
-                # MCL_MicroDriveResetXEncoder(unsigned char* status, int handle);
-                response = self.library.MCL_MicroDriveResetXEncoder(ctypes.byref(status),self.handle)                
-            elif axis.lower()=='y':  
-                # MCL_MicroDriveResetYEncoder(unsigned char* status, int handle);          
-                response = self.library.MCL_MicroDriveResetYEncoder(ctypes.byref(status),self.handle)
-            elif axis.lower()=='z':
-                # MCL_MicroDriveResetZEncoder(unsigned char* status, int handle);
-                response = self.library.MCL_MicroDriveResetZEncoder(ctypes.byref(status),self.handle)                
-            else: #axis.lower()=='all'
-                # MCL_MicroDriveStop(unsigned char* status, int handle);
-                response = self.library.MCL_MicroDriveResetEncoders(ctypes.byref(status),self.handle)
             if self.check_success(response):
                 flags = self.check_movement(status.value)                           
         return flags
@@ -417,8 +403,10 @@ class MicroDrive():
         # move along each axis by the step amount specified in "move" (can be positive or negative) (move in [#], velocity[m/s])
         position_old = self.step.copy()
         position_new = self.step.copy()
+        polarity = self.travel['direction']
         if not move or ( len(move)<self.axes['count'] ) :
             move = [0.0]*self.axes['count']
+        move = [move[i]*polarity[i] for i in range(self.axes['count'])]            
         if not velocity or ( len(velocity)<self.axes['count'] ) :
             velocity = self.travel['velocity']      
         if self.loaded and self.connected:
@@ -430,8 +418,8 @@ class MicroDrive():
             #    double velocityZ,
             #    int microStepsZ,
             #    int handle    ); 
-            self.wait()                       
-            mov = self.format_position([ctypes.c_int(round(m*1e3)) for m in move])
+            self.wait()         
+            mov = self.format_position([ctypes.c_int(round(m)) for m in move])
             vel = self.format_position([ctypes.c_double(v*1e3) for v in velocity])            
             response = self.library.MCL_MicroDriveMoveProfileXYZ_MicroSteps(vel['x'],mov['x'],vel['y'],mov['y'],vel['z'],mov['z'],self.handle)
             if self.check_success(response):
@@ -443,8 +431,10 @@ class MicroDrive():
         # move along each axis by the distance specified in "move" (can be positive or negative) (move in [m], velocity[m/s])
         position_old = self.position.copy()
         position_new = self.position.copy()
+        polarity = self.travel['direction']
         if not move or ( len(move)<self.axes['count'] ) :
             move = [0.0]*self.axes['count']
+        move = [move[i]*polarity[i] for i in range(self.axes['count'])]            
         if not velocity or ( len(velocity)<self.axes['count'] ) :
             velocity = self.travel['velocity'] 
         if not rounding or ( len(rounding)<self.axes['count'] ) :
@@ -462,7 +452,7 @@ class MicroDrive():
             #     int roundingZ,
             #     int handle     );
             self.wait()           
-            mov = self.format_position([ctypes.c_double(round(m*1e3)) for m in move])
+            mov = self.format_position([ctypes.c_double(m*1e3) for m in move])
             vel = self.format_position([ctypes.c_double(v*1e3) for v in velocity])
             rou = self.format_position([ctypes.c_int(r) for r in rounding])                        
             response = self.library.MCL_MicroDriveMoveProfileXYZ(vel['x'],mov['x'],rou['x'],vel['y'],mov['y'],rou['y'],vel['z'],mov['z'],rou['z'],self.handle)
@@ -471,10 +461,62 @@ class MicroDrive():
                 position_new = self.position.copy()
         return self.review_position_change(position_new,position_old,self.format_position(move))
 
+    def reset(self,axis='all'):
+        # reset all encoders (makes the current position of the microstage the zero position of the encoder)
+        flags = dict()
+        if self.loaded and self.connected:
+            status = ctypes.c_ubyte(); 
+            if axis.lower()=='x':
+                # MCL_MicroDriveResetXEncoder(unsigned char* status, int handle);
+                response = self.library.MCL_MicroDriveResetXEncoder(ctypes.byref(status),self.handle)                
+            elif axis.lower()=='y':  
+                # MCL_MicroDriveResetYEncoder(unsigned char* status, int handle);          
+                response = self.library.MCL_MicroDriveResetYEncoder(ctypes.byref(status),self.handle)
+            elif axis.lower()=='z':
+                # MCL_MicroDriveResetZEncoder(unsigned char* status, int handle);
+                response = self.library.MCL_MicroDriveResetZEncoder(ctypes.byref(status),self.handle)                
+            else: #axis.lower()=='all'
+                # MCL_MicroDriveStop(unsigned char* status, int handle);
+                response = self.library.MCL_MicroDriveResetEncoders(ctypes.byref(status),self.handle)
+            if self.check_success(response):
+                flags = self.check_movement(status.value)                           
+        return flags
 
-    # def find_limits(self):
+    def run_to_axis_limits(self,direction='forward',axis='x',stepsize=10**3,velocity=None):
+        # find forward or reverse axis limit
+        axisInd = self.axes['name'].index(axis.lower())
+        move = [0]*self.axes['count']
+        move[axisInd] = stepsize
+        direction = direction.lower()
+        if direction=='reverse':
+            move[axisInd] = -move[axisInd]
+        if not velocity or ( len(velocity)<self.axes['count'] ) :
+            velocity = self.travel['velocityFast'] 
+        railed = False
+        while not railed:
+            stage.move_by_step(move,velocity=velocity)
+            railed = stage.get_limit_status()[direction][axisInd]
+        return {'position':self.read_position(),'step':self.read_step()}
+    
+    def get_axis_limits(self,axis='x',stepsize=10**3,velocity=None):
+        # get the position extremes for an axis
+        return {direction:self.run_to_axis_limits(direction=direction,axis=axis,stepsize=stepsize,velocity=velocity)['position'][axis] 
+                for direction in ['forward','reverse']}
+    
+    def get_limits(self,stepsize=10**3,velocity=None):
+        # get the position extremes for all axes
+        return {ax:self.get_axis_limits(axis=ax,stepsize=stepsize,velocity=velocity) 
+                for ax in self.axes['name']}
 
-    #     return limits
+    def center_axes(self,stepsize=10**3,velocity=None):
+        limits = self.get_limits(stepsize=stepsize,velocity=velocity)
+        reverses = [limits[ax]['reverse'] for ax in stage.axes['name']]        
+        forwards = [limits[ax]['forward'] for ax in stage.axes['name']]
+        centers = [(reverses[i]+forwards[i])/2 for i in range(self.axes['count'])]
+        moves = [centers[i]-reverses[i] for i in range(self.axes['count'])]
+        self.move_by_distance(moves,velocity=velocity)
+        self.reset()
+        return {'position':self.read_position(),'step':self.read_step(),'limits':limits,'centers':centers,'moves':moves}
 
 if __name__ == "__main__":
 
@@ -485,19 +527,11 @@ if __name__ == "__main__":
         stage.stop() # stop the stage from moving
         stage.wait() # wait for stage to stop moving
         # wait_time = 0.01 # time to wait [sec]
-        # time.sleep(wait_time) 
-
-    if stage.is_at_limit():
-        # find which axes are at their rails and reset them    	
-    	flags = stage.get_limit_status()
-    	for n in range(stage.axes['count']):
-    		ax = stage.axes['name'][n]
-    		if flags['forward'][n]:
-    			stage.notify(ax.upper()+'-Axis Forward Limiter Reached.')
-    		if flags['reverse'][n]:
-    			stage.notify(ax.upper()+'-Axis Reverse Limiter Reached.')    		
-
-    stage.read() 
+        # time.sleep(wait_time)         
+    stage.check_limits() # check if at limitss
+    stage.read() # read current position
+    #stage.center_axes() # center all axis 
+    
     # print(stage.move_by_step([1,2,1])) # move by stage steps
     # print(stage.move_by_distance([1e-6,0.0e-6,0.1e-6])) # move in meters
     # print(stage.position)
