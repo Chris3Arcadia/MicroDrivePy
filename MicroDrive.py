@@ -18,7 +18,6 @@ class MicroDrive():
     def __init__(self):
         self.load_options()
         self.load_constants()
-        self.load_microdrive3()
         self.set_path()    
         self.load_library()
         self.connect()
@@ -42,9 +41,6 @@ class MicroDrive():
               -7: 'MCL_INVALID_AXIS',
               -8: 'MCL_INVALID_HANDL',
         } # Mad City Labs Stage Response Integer to Error Code
-
-    def load_microdrive3(self):
-        # load constants specific to Micro-Drive3
 
         self.movements = {
             7: 'Success/Failure!',
